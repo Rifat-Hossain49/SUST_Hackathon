@@ -91,7 +91,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ### Test
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                          # 41 unit/integration tests incl. all 10 sample cases
+pytest -q                          # 43 unit/integration tests incl. all 10 sample cases
 python scripts/smoke_test.py http://localhost:8000   # black-box checks + p95 latency
 ```
 
@@ -232,7 +232,7 @@ app/            FastAPI service
   normalize.py    Bangla digits, amount extraction, language detection
   llm.py          optional Gemini polish with model fallback chain
   config.py       env-var configuration
-tests/          41 tests incl. all 10 public sample cases
+tests/          43 tests incl. all 10 public sample cases
 scripts/        smoke_test.py (black-box) + deploy_vm.sh + sample-output generator
 Dockerfile, docker-compose.yml, requirements*.txt, .env.example
 RUNBOOK.md      copy-paste deploy/run steps
