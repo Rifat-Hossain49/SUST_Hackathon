@@ -68,41 +68,73 @@ After deploy, confirm: `curl https://<your-url>/health` → `{"status":"ok"}`.
 
 ---
 
-## Option D - GitHub Actions CI/CD to DockerHub + VM
+## Option D — GitHub Actions CI/CD to DockerHub + Poridhi VM
 
-The workflow in `.github/workflows/ci-cd.yml` runs on pushes to `main` and manual
-dispatch:
+The workflow in `.github/workflows/ci-cd.yml` runs on every push to `main` and on
+manual dispatch:
 
 1. Install dependencies and run `pytest`.
 2. Build the Docker image.
-3. Push `rifathosain/queuestorm-investigator:latest` and a `sha-xxxxxxx` tag.
-4. If SSH secrets are present, copy `scripts/deploy_vm.sh` to the VM and restart
-   the container on port `8011`.
+3. Push `rifathosain/queuestorm-investigator:latest` and a `sha-xxxxxxx` tag to
+   DockerHub.
+4. SSH into the Poridhi VM, copy `scripts/deploy_vm.sh`, and restart the container
+   on port `8011`.
 
 ### Required GitHub Secrets
 
-Set these in GitHub: Repository -> Settings -> Secrets and variables -> Actions.
-Do not commit the actual values.
+Set these in GitHub: Repository → Settings → Secrets and variables → Actions.
 
 | Secret | Required? | Value |
 |---|---:|---|
-| `DOCKERHUB_USERNAME` | Yes | DockerHub username, e.g. `rifathosain` |
+| `DOCKERHUB_USERNAME` | Yes | DockerHub username — `rifathosain` |
 | `DOCKERHUB_TOKEN` | Yes | DockerHub access token or password |
-| `VM_HOST` | For deploy | SSH-reachable VM host/IP |
-| `VM_USER` | For deploy | SSH username on the VM |
-| `VM_SSH_PRIVATE_KEY` | For deploy | Private key that can SSH into the VM |
+| `VM_HOST` | For VM deploy | SSH-reachable host/IP of the Poridhi VM |
+| `VM_USER` | For VM deploy | SSH username on the VM |
+| `VM_SSH_PRIVATE_KEY` | For VM deploy | Private key that can SSH into the VM |
 | `VM_SSH_PORT` | Optional | SSH port, defaults to `22` |
-| `VM_APP_PORT` | Optional | Host app port, defaults to `8011` |
-| `USE_LLM` | Optional | `true` to enable Gemini, otherwise omit or set `false` |
-| `GEMINI_API_KEY` | Optional | Gemini API key, only if `USE_LLM=true` |
-| `MODEL_NAME` | Optional | Defaults to `gemini-3.5-flash` |
-| `LLM_TIMEOUT_SECONDS` | Optional | Defaults to `4.0` |
-| `LLM_MAX_TOKENS` | Optional | Defaults to `600` |
+| `VM_APP_PORT` | Optional | Host-side app port, defaults to `8011` |
 
-Important: the Poridhi load-balancer URL is for HTTP traffic to your app, not SSH.
-If the VM host is a private `100.x.x.x` address, GitHub-hosted runners usually
-cannot reach it directly. In that case either use a Poridhi/public SSH endpoint,
-or install a GitHub self-hosted runner inside the Poridhi lab/VM network.
+**Gemini API key and LLM settings are NOT GitHub Secrets.** They are configured
+directly on the Poridhi VM (see below). This keeps the key out of CI logs and
+GitHub entirely.
+
+### Gemini config on the Poridhi VM
+
+The deploy script (`scripts/deploy_vm.sh`) starts the container with
+`--env-file ~/queuestorm-investigator/runtime.env`. Edit that file on the VM to
+control Gemini:
+
+```bash
+# on the Poridhi VM
+nano ~/queuestorm-investigator/runtime.env
+```
+
+Example `runtime.env` with Gemini enabled:
+```
+PORT=8000
+USE_LLM=true
+GEMINI_API_KEY=<your-key>
+MODEL_NAME=gemini-3.5-flash
+LLM_FALLBACK_MODELS=gemini-2.0-flash-lite,gemini-1.5-flash-8b
+LLM_TIMEOUT_SECONDS=4.0
+LLM_MAX_TOKENS=600
+```
+
+The file persists across deploys — `deploy_vm.sh` never overwrites it if it already
+exists. After editing, restart the container to pick up the new values:
+
+```bash
+docker rm -f qsi
+~/queuestorm-investigator/deploy_vm.sh \
+  rifathosain/queuestorm-investigator:latest qsi 8011
+```
+
+### Poridhi load-balancer note
+
+The Poridhi load-balancer URL is for HTTP traffic to your app, not for SSH. If the
+VM host is a private `100.x.x.x` address, GitHub-hosted runners usually cannot
+reach it directly — use the Poridhi-provided public SSH endpoint, or install a
+GitHub self-hosted runner inside the Poridhi lab/VM network.
 
 After a successful deploy, verify:
 
@@ -121,20 +153,54 @@ python scripts/smoke_test.py http://localhost:8000      # or your live URL
 Checks `/health`, schema + enums, the evidence-reasoning fields against the public
 expected outputs, the safety rules, malformed-input handling, and reports p95 latency.
 
+---
+
 ## Optional: enable Gemini text polish (off by default)
+
+The service uses a **three-model fallback chain** so a quota limit on one model
+never takes down the LLM path:
+
+```
+gemini-3.5-flash  →  gemini-2.0-flash-lite  →  gemini-1.5-flash-8b  →  deterministic text
+```
+
+All three models share one 4-second deadline. Quota errors (HTTP 429) come back in
+milliseconds, so switching models adds negligible latency. A timeout always stops
+the chain immediately — total wall-clock time is always bounded.
+
+### Run locally with Gemini enabled
 ```bash
 docker run -d -p 8000:8000 \
   -e USE_LLM=true \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
   -e MODEL_NAME=gemini-3.5-flash \
+  -e LLM_FALLBACK_MODELS=gemini-2.0-flash-lite,gemini-1.5-flash-8b \
   queuestorm-investigator
 ```
-Decisions and the safety filter are unchanged; only the wording of the text fields
-may be rephrased, and a 4 s timeout falls back to the deterministic text. Set the
-real key only in your deploy environment or the private judging field.
+
+Decisions and the safety filter are unchanged; only the wording of the three
+free-text fields may be rephrased. The deterministic safety filter always re-runs
+on the LLM output before it leaves the service.
+
+### Override the fallback chain
+
+To disable fallbacks entirely (use only the primary model):
+```bash
+-e LLM_FALLBACK_MODELS=""
+```
+
+To add or reorder models:
+```bash
+-e LLM_FALLBACK_MODELS=gemini-2.5-flash-lite,gemini-1.5-flash-8b
+```
+
+---
 
 ## Troubleshooting
+
 - **Port already in use:** map a different host port, e.g. `-p 8080:8000`.
 - **Health not ready:** the app starts in well under 60 s; check `docker logs qsi`.
-- **No secrets required:** if you see auth errors, you set `USE_LLM=true` without a
-  valid `GEMINI_API_KEY` — unset `USE_LLM` to run the default rule-based service.
+- **Auth errors with USE_LLM=true:** the `GEMINI_API_KEY` is missing or invalid —
+  unset `USE_LLM` to run the default rule-based service with no key required.
+- **All models returning 429:** free-tier quota exhausted for the day — unset
+  `USE_LLM` and the service continues rule-based with no degradation to scored fields.

@@ -169,14 +169,36 @@ negated mention that reinforces good security hygiene.
 | Model | Where it runs | Role | Why |
 |---|---|---|---|
 | **None (deterministic rules)** | In-process, CPU-only | **All decisions + all text, by default** | Reproducible, injection-proof, p95 ≈ ms, zero cost, no API key. The spec explicitly allows rule-based solutions and an LLM is not required to score well. |
-| **`gemini-3.5-flash`** *(optional, off)* | Google Gemini API | Rephrase the 3 free-text fields only | If enabled (`USE_LLM=true` + `GEMINI_API_KEY`), Gemini receives the complaint, transaction snippet, and deterministic decision so it can produce more professional text. A 4 s timeout falls back to rule text; the safety filter always re-runs on its output. |
+| **`gemini-3.5-flash`** *(primary, optional)* | Google Gemini API | Rephrase the 3 free-text fields only | First model tried when `USE_LLM=true` + `GEMINI_API_KEY` is set. Produces professional, context-aware summaries and customer replies. |
+| **`gemini-2.0-flash-lite`** *(fallback 1)* | Google Gemini API | Same role as above | Tried automatically if the primary model returns HTTP 429 (quota/rate-limit). Sits under a separate free-tier quota. |
+| **`gemini-1.5-flash-8b`** *(fallback 2)* | Google Gemini API | Same role as above | Last model in the chain before falling back to deterministic text. Smallest quota footprint. |
+
+**Latency guarantee.** All three models share one 4-second deadline (`LLM_TIMEOUT_SECONDS`).
+Quota errors (HTTP 429/413) come back in milliseconds, so switching models adds negligible
+latency. A network timeout always stops the chain immediately — no retry — so total
+wall-clock time is always bounded. The model chain is configurable via `LLM_FALLBACK_MODELS`.
 
 **Cost reasoning.** The default configuration makes **zero external calls** and costs
-nothing to run — important because no LLM credits are provided for this round. The
-optional Gemini call is a quality enhancement, not a dependency; decisions and
-safety never rely on it. If enabled, synthetic complaint text and the provided
-transaction snippet are sent to Google Gemini, so the real key must be supplied
-only through deployment environment variables or the private judging field.
+nothing to run. The optional Gemini call is a quality enhancement, not a dependency;
+decisions and safety never rely on it. The API key is supplied only through the
+deployment environment (the Poridhi VM's `runtime.env` file) and never committed
+to the repository.
+
+## Deployment
+
+The service is deployed on a **Poridhi VM** via GitHub Actions CI/CD
+(`.github/workflows/ci-cd.yml`). On every push to `main`:
+
+1. Tests run (`pytest -q`).
+2. The Docker image is built and pushed to DockerHub as
+   `rifathosain/queuestorm-investigator:latest`.
+3. The workflow SSHes into the VM and calls `scripts/deploy_vm.sh`, which pulls
+   the new image and restarts the container.
+
+The Gemini API key and all LLM settings (`USE_LLM`, `GEMINI_API_KEY`, `MODEL_NAME`,
+`LLM_FALLBACK_MODELS`, etc.) are configured directly in the VM's
+`~/queuestorm-investigator/runtime.env` file — not as GitHub Secrets — so they
+persist across deploys and are never written to CI logs or the repository.
 
 ## Assumptions
 
@@ -208,10 +230,10 @@ app/            FastAPI service
   replies.py      EN/BN reply + next-action templates
   safety.py       deterministic safety guardrails
   normalize.py    Bangla digits, amount extraction, language detection
-  llm.py          optional Gemini polish (off by default)
+  llm.py          optional Gemini polish with model fallback chain
   config.py       env-var configuration
 tests/          41 tests incl. all 10 public sample cases
-scripts/        smoke_test.py (black-box) + sample-output generator
+scripts/        smoke_test.py (black-box) + deploy_vm.sh + sample-output generator
 Dockerfile, docker-compose.yml, requirements*.txt, .env.example
 RUNBOOK.md      copy-paste deploy/run steps
 sample_output.json   service output for all 10 public cases
