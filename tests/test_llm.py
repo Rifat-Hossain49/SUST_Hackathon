@@ -51,7 +51,11 @@ def test_gemini_polish_parses_json_response(monkeypatch):
             return json.dumps(response_body).encode("utf-8")
 
     def fake_urlopen(_request, timeout):
-        assert timeout == settings.LLM_TIMEOUT_SECONDS
+        # The client passes the remaining budget (deadline - now), which is
+        # bounded by settings.LLM_TIMEOUT_SECONDS. Tolerate sub-millisecond
+        # drift from time.monotonic() arithmetic.
+        assert timeout <= settings.LLM_TIMEOUT_SECONDS + 0.01
+        assert timeout > 0
         return FakeResponse()
 
     monkeypatch.setattr("app.llm.request.urlopen", fake_urlopen)
