@@ -1,0 +1,16 @@
+# Local convenience: `docker compose up --build` then hit http://localhost:8000
+services:
+  api:
+    build: .
+    image: codex-prelim-api:latest
+    ports:
+      - "8000:8000"
+    environment:
+      # Override the main endpoint path to match the Problem Statement.
+      MAIN_ENDPOINT: "/analyze"
+      # LLM is off by default; flip on and pass a key via env / --env-file.
+      USE_LLM: "false"
+      # ANTHROPIC_API_KEY is injected from the environment, never committed.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      MODEL_NAME: "claude-haiku-4-5"
+    restart: unless-stopped
