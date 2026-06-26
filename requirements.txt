@@ -3,6 +3,5 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
-# Optional LLM polish (OFF by default). The SDK is small (no model weights);
-# it is only imported when USE_LLM=true, so it never affects the default path.
-anthropic==0.42.0
+# Optional Gemini polish uses the REST API via Python stdlib urllib, so no
+# model weights or provider SDK are needed in the image.

@@ -8,7 +8,8 @@ services:
       - "8000:8000"
     environment:
       - PORT=8000
-      # Optional LLM polish — leave off for the default rule-based service.
+      # Optional Gemini polish. Leave off for the default rule-based service.
       - USE_LLM=false
-      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # - MODEL_NAME=gemini-3.5-flash
     restart: unless-stopped

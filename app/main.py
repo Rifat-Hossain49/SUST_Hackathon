@@ -38,6 +38,20 @@ log = logging.getLogger("app")
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 
 
+@app.get("/")
+def root() -> dict:
+    return {
+        "service": settings.APP_NAME,
+        "status": "ok",
+        "message": "QueueStorm Investigator is an API service. Use /health, /docs, and /analyze-ticket.",
+        "endpoints": {
+            "health": "/health",
+            "docs": "/docs",
+            "analyze_ticket": settings.MAIN_ENDPOINT,
+        },
+    }
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
@@ -80,8 +94,8 @@ def analyze_ticket(req: AnalyzeTicketRequest) -> AnalyzeTicketResponse:
     try:
         result = analyze(req)
 
-        # Optional LLM rephrase of text only (decision/routing untouched).
-        polished = llm.polish(result)
+        # Optional Gemini rephrase of text only (decision/routing untouched).
+        polished = llm.polish(result, req)
 
         # Safety filter is authoritative: re-run on the FINAL reply (covers the
         # LLM path); the rule path already sanitized but this is idempotent.

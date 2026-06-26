@@ -68,10 +68,16 @@ all 10 public sample cases.
 
 ### Run with Docker (recommended)
 ```bash
+# Option 1 — pull the published image
+docker pull rifathosain/queuestorm-investigator:latest
+docker run -p 8000:8000 rifathosain/queuestorm-investigator:latest
+
+# Option 2 — build locally
 docker build -t queuestorm-investigator .
 docker run -p 8000:8000 queuestorm-investigator
-# in another shell:
-curl http://localhost:8000/health
+
+# verify (either option):
+curl http://localhost:8000/health        # -> {"status":"ok"}
 ```
 Or `docker compose up --build`. Full copy-paste steps are in [`RUNBOOK.md`](RUNBOOK.md).
 
@@ -95,7 +101,7 @@ python scripts/smoke_test.py http://localhost:8000   # black-box checks + p95 la
 
 - **Python 3.12**, **FastAPI**, **Pydantic v2**, **Uvicorn** — small, fast, async.
 - **Deterministic rule engine** for all decisions (no model weights, CPU-only).
-- **Optional** Anthropic SDK for LLM text polish (off by default — see MODELS).
+- **Optional** Gemini REST call for LLM text polish (off by default; see MODELS).
 - **Docker** image on `python:3.12-slim` (~250 MB, well under the 5 GB guidance).
 
 ## Architecture & AI approach
@@ -118,8 +124,9 @@ scored — are **deterministic**. This makes them reproducible, debuggable, immu
 prompt injection in the complaint text, and fast (p95 in milliseconds, far under the
 5 s full-credit threshold). An LLM is **not required** to score well here, and a
 non-deterministic model in the decision path would risk both latency and unsafe
-output. An optional LLM can rephrase the free-text fields for fluency, but the
-deterministic safety filter always runs last.
+output. An optional Gemini layer can rephrase the free-text fields for fluency
+using the complaint, transaction history, and deterministic decision as context,
+but the deterministic safety filter always runs last.
 
 **The investigator logic (Evidence Reasoning).**
 1. **Relevant transaction** — extract amounts from the complaint (incl. Bangla
@@ -162,12 +169,14 @@ negated mention that reinforces good security hygiene.
 | Model | Where it runs | Role | Why |
 |---|---|---|---|
 | **None (deterministic rules)** | In-process, CPU-only | **All decisions + all text, by default** | Reproducible, injection-proof, p95 ≈ ms, zero cost, no API key. The spec explicitly allows rule-based solutions and an LLM is not required to score well. |
-| **`claude-haiku-4-5`** *(optional, off)* | Anthropic API | Rephrase the 3 free-text fields only | If enabled (`USE_LLM=true` + key), Haiku 4.5 is the cheapest/fastest tier ($1/$5 per 1M tok), keeping p95 ≤ 5 s. A 4 s timeout falls back to rule text; the safety filter always re-runs on its output. Upgrade to `claude-opus-4-8` for higher text quality. |
+| **`gemini-3.5-flash`** *(optional, off)* | Google Gemini API | Rephrase the 3 free-text fields only | If enabled (`USE_LLM=true` + `GEMINI_API_KEY`), Gemini receives the complaint, transaction snippet, and deterministic decision so it can produce more professional text. A 4 s timeout falls back to rule text; the safety filter always re-runs on its output. |
 
 **Cost reasoning.** The default configuration makes **zero external calls** and costs
 nothing to run — important because no LLM credits are provided for this round. The
-optional LLM is a quality enhancement, not a dependency; decisions and safety never
-rely on it.
+optional Gemini call is a quality enhancement, not a dependency; decisions and
+safety never rely on it. If enabled, synthetic complaint text and the provided
+transaction snippet are sent to Google Gemini, so the real key must be supplied
+only through deployment environment variables or the private judging field.
 
 ## Assumptions
 
@@ -186,8 +195,8 @@ rely on it.
   design rather than guessing.
 - Inconsistency detection covers the documented "established recipient" pattern;
   other contradictions default to `consistent` to avoid false accusations.
-- Bangla NLP is keyword/heuristic-based (no Bangla LLM in the default path); the
-  optional LLM can improve nuance if enabled.
+- Bangla NLP is keyword/heuristic-based in the default path; optional Gemini
+  polish can improve wording nuance if enabled.
 - `confidence` is a heuristic calibration, not a probabilistic estimate.
 
 ## Repository layout
@@ -199,7 +208,7 @@ app/            FastAPI service
   replies.py      EN/BN reply + next-action templates
   safety.py       deterministic safety guardrails
   normalize.py    Bangla digits, amount extraction, language detection
-  llm.py          optional Claude polish (off by default)
+  llm.py          optional Gemini polish (off by default)
   config.py       env-var configuration
 tests/          41 tests incl. all 10 public sample cases
 scripts/        smoke_test.py (black-box) + sample-output generator
