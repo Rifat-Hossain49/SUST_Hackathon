@@ -36,8 +36,21 @@ class Settings:
         "GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"
     )
 
-    # Hard per-request LLM timeout. On timeout/error we fall back to the
-    # deterministic text so the API never approaches the 30s judge limit.
+    # Fallback model chain tried in order when the primary model returns a
+    # quota/rate-limit error (HTTP 429/413). Smaller models sit under different
+    # free-tier quotas, so this buys resilience at near-zero extra latency
+    # (quota errors are returned in milliseconds). Timeout errors skip the chain
+    # entirely so the total wall-clock time is still bounded by LLM_TIMEOUT_SECONDS.
+    LLM_FALLBACK_MODELS: list[str] = [
+        m.strip()
+        for m in os.getenv(
+            "LLM_FALLBACK_MODELS", "gemini-2.0-flash-lite,gemini-1.5-flash-8b"
+        ).split(",")
+        if m.strip()
+    ]
+
+    # Hard per-request LLM timeout shared across the entire fallback chain.
+    # On timeout we stop immediately and return deterministic text.
     LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "4.0"))
     LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "600"))
 

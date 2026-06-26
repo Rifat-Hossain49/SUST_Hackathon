@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from enum import Enum
 from typing import Any
 from urllib import error, parse, request
@@ -60,6 +61,16 @@ Return ONLY valid JSON with exactly these string keys:
 """
 
 _TEXT_KEYS = ("agent_summary", "recommended_next_action", "customer_reply")
+
+# HTTP status codes that indicate quota exhaustion or rate-limiting on a specific
+# model. These errors come back in milliseconds, so retrying the next smaller model
+# in the fallback chain adds negligible latency while improving resilience.
+# 429 = RESOURCE_EXHAUSTED (quota/rate limit); 413 = payload too large.
+_QUOTA_CODES = frozenset({429, 413})
+
+# Don't bother starting a model call if less than this many seconds remain in
+# the shared deadline — not enough time for a round-trip to succeed.
+_MIN_ATTEMPT_SECS = 0.5
 
 
 def _jsonable(value: Any) -> Any:
@@ -136,22 +147,47 @@ def _validated_texts(data: dict[str, Any], fallback: dict[str, str]) -> dict[str
     return out
 
 
+def _model_url(model: str) -> str:
+    clean = model.replace("models/", "").strip()
+    return (
+        settings.GEMINI_API_BASE_URL.rstrip("/")
+        + f"/models/{parse.quote(clean, safe='')}:generateContent"
+    )
+
+
+def _call_model(model: str, body: dict[str, Any], timeout: float) -> str:
+    """HTTP POST to one Gemini model; returns the extracted text. Raises on any error."""
+    req = request.Request(
+        _model_url(model),
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": settings.GEMINI_API_KEY,
+        },
+        method="POST",
+    )
+    with request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read().decode("utf-8", errors="replace")
+    return _extract_text(json.loads(raw))
+
+
 class LLMClient:
     def polish(self, result: dict[str, Any], ticket_request: Any | None = None) -> dict[str, str]:
         """Return {agent_summary, recommended_next_action, customer_reply}.
 
-        Any Gemini error, timeout, quota issue, blocked response, or invalid JSON
-        falls back to the deterministic text.
+        Model fallback strategy (latency-safe):
+        - All models share one deadline (LLM_TIMEOUT_SECONDS).
+        - On HTTP 429/413 (quota/rate-limit): the error comes back in milliseconds,
+          so we immediately try the next smaller model in LLM_FALLBACK_MODELS.
+        - On timeout or network error: stop the loop immediately — no retry — so
+          latency is always bounded by the shared deadline.
+        - Any remaining time is the budget given to the next model's urlopen call,
+          so no model can push total wall-clock time past the deadline.
         """
         fallback = _base_text(result)
         if not settings.llm_enabled:
             return fallback
 
-        model = settings.MODEL_NAME.replace("models/", "").strip()
-        url = (
-            settings.GEMINI_API_BASE_URL.rstrip("/")
-            + f"/models/{parse.quote(model, safe='')}:generateContent"
-        )
         body = {
             "systemInstruction": {"parts": [{"text": _SYSTEM}]},
             "contents": [
@@ -174,25 +210,38 @@ class LLMClient:
                 "responseMimeType": "application/json",
             },
         }
-        req = request.Request(
-            url,
-            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": settings.GEMINI_API_KEY,
-            },
-            method="POST",
-        )
 
-        try:
-            with request.urlopen(req, timeout=settings.LLM_TIMEOUT_SECONDS) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-            response_body = json.loads(raw)
-            text = _extract_text(response_body)
-            return _validated_texts(_extract_json_object(text), fallback)
-        except (TimeoutError, error.URLError, error.HTTPError, ValueError, json.JSONDecodeError):
-            log.warning("Gemini polish failed; using deterministic text", exc_info=False)
-            return fallback
+        models = [settings.MODEL_NAME, *settings.LLM_FALLBACK_MODELS]
+        deadline = time.monotonic() + settings.LLM_TIMEOUT_SECONDS
+
+        for model in models:
+            remaining = deadline - time.monotonic()
+            if remaining < _MIN_ATTEMPT_SECS:
+                log.warning("LLM budget exhausted; using deterministic text")
+                break
+            try:
+                text = _call_model(model, body, remaining)
+                return _validated_texts(_extract_json_object(text), fallback)
+            except error.HTTPError as exc:
+                if exc.code in _QUOTA_CODES:
+                    log.warning(
+                        "Model %s returned HTTP %s (quota/rate); trying next fallback",
+                        model, exc.code,
+                    )
+                    continue
+                log.warning(
+                    "Gemini HTTP %s on model %s; using deterministic text",
+                    exc.code, model,
+                )
+                break
+            except (TimeoutError, error.URLError, ValueError, json.JSONDecodeError) as exc:
+                log.warning(
+                    "Gemini polish failed (%s); using deterministic text",
+                    type(exc).__name__,
+                )
+                break  # never retry on timeout — latency must stay bounded
+
+        return fallback
 
 
 llm = LLMClient()
