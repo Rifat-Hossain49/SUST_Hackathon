@@ -1,0 +1,8 @@
+# Local dev + test deps. On this machine the default Python is 3.14 (no pinned
+# pydantic-core wheel), so for local pytest create a venv and install latest:
+#   py -3.12 -m venv .venv  ||  python -m venv .venv
+#   .venv\Scripts\pip install -U fastapi "pydantic>=2.12" "uvicorn[standard]" httpx pytest anthropic
+# Docker remains the source of truth (uses requirements.txt on python:3.12-slim).
+-r requirements.txt
+pytest==8.3.4
+httpx==0.28.1

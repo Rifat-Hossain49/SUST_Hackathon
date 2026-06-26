@@ -1,0 +1,14 @@
+# Convenience for local runs / judge Docker fallback.
+#   docker compose up --build      ->  http://localhost:8000/health
+services:
+  api:
+    build: .
+    image: queuestorm-investigator:latest
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      # Optional LLM polish — leave off for the default rule-based service.
+      - USE_LLM=false
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    restart: unless-stopped

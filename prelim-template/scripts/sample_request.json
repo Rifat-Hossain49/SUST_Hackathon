@@ -1,8 +1,0 @@
-{
-  "case_id": "CASE-1042",
-  "customer_message": "I sent money to a merchant but the payment failed and the amount was deducted from my balance.",
-  "category": "transaction",
-  "transaction": { "amount": 1500, "currency": "BDT", "status": "failed", "channel": "send_money" },
-  "history": [],
-  "context": {}
-}

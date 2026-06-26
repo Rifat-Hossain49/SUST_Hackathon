@@ -1,6 +1,0 @@
-# Runtime dependencies (kept lean so the Docker image stays well under 1 GB).
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-pydantic==2.10.4
-# Optional LLM augmentation. Pure-Python + httpx; only used when USE_LLM=true.
-anthropic==0.69.0
